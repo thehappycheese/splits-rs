@@ -1,9 +1,22 @@
 #![feature(iter_map_windows)]
+use std::sync::Arc;
+
+use arrow::array::make_array;
+use arrow::array::Array;
+use arrow::array::ArrayData;
+use arrow::array::StringArray;
+use arrow::array::StringBuilder;
+use arrow::array::StringViewArray;
+use arrow::array::StructArray;
+use arrow::array::UInt64Builder;
+use arrow::datatypes::DataType;
+use arrow::datatypes::Field;
+use arrow::pyarrow::PyArrowType;
 use ndarray::parallel::prelude::IndexedParallelIterator;
 use ndarray::parallel::prelude::IntoParallelIterator;
 use ndarray::parallel::prelude::ParallelIterator;
-use numpy::{PyArray1, PyArray2, PyReadonlyArrayDyn};
-use numpy::ndarray::{ArrayView1};
+use numpy::PyReadonlyArrayDyn;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 
@@ -12,6 +25,7 @@ use pyo3::prelude::*;
 fn splits_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(split_string, m)?)?;
     m.add_function(wrap_pyfunction!(split_strings, m)?)?;
+    m.add_function(wrap_pyfunction!(split_strings_arrow, m)?)?;
     Ok(())
 }
 
@@ -55,4 +69,46 @@ fn split_strings<'py>(input: PyReadonlyArrayDyn<'py, PyObject>, py:Python<'_>) -
         .collect();
 
     Ok(result)
+}
+
+#[pyfunction]
+fn split_strings_arrow<'py>(input: PyArrowType<ArrayData>) -> PyResult<(PyArrowType<ArrayData>,PyArrowType<ArrayData>)> {
+    // First, do single-threaded extraction of the strings
+    let input = input.0; // Extract from PyArrowType wrapper
+    let array: Arc<dyn Array> = make_array(input); // Convert ArrayData to ArrayRef
+    let array: &StringArray = array.as_any().downcast_ref()
+        .ok_or_else(|| PyValueError::new_err("Could not cast to string array"))?;
+
+    
+
+    let mut result:(UInt64Builder, StringBuilder) = array
+        .iter()
+        .enumerate()
+        .fold(
+            (UInt64Builder::new(), StringBuilder::new()),
+            |(mut v_a, mut v_b),(i, s)| match s {
+            Some(s)=>{
+                let ws = s.split_whitespace();
+                let _:Vec<_> = ws.clone().map_windows(|[a,b,c]| {
+                    v_a.append_value(i as u64);
+                    v_b.append_value(format!("{a} {b} {c}"));
+                }).collect();
+                let _:Vec<_> = ws.clone().map_windows(|[a,b]| {
+                    v_a.append_value(i as u64);
+                    v_b.append_value(format!("{a} {b}"));
+                }).collect();
+
+                let _:Vec<_> = ws.clone().map(|a| {
+                    v_a.append_value(i as u64);
+                    v_b.append_value(a.to_owned());
+                }).collect();
+
+                (v_a, v_b)
+            }
+            None=>(v_a, v_b)
+        });
+    Ok((
+        PyArrowType(result.0.finish().into_data()),
+        PyArrowType(result.1.finish().into_data())
+    ))
 }

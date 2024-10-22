@@ -28,25 +28,40 @@ splits_rs.split_string("Sion Softside Expandable\nRoller Luggage, Black")
 ]
 ```
 
-also provides a version that accepts a numpy array `splits_rs.split_strings()`
+Also provides a version that accepts a numpy array `splits_rs.split_strings()` or `pyarrow` arrays with `splits_rs.split_strings_arrow()`
+
+The following example shows the arrow method as it is 10x faster.
 
 ```python
+import pandas as pd
+import pyarrow as pa
+import splits_rs
+import re
+from pathlib import Path
+
 amazon = pd.read_csv(
     "../data/input/amazon_products.csv.zip",
-    #nrows=10
-).set_index("asin")["title"]#.astype(pd.ArrowDtype(pa.string()))
+).set_index("asin")["title"]
 amazon = amazon.dropna()
 assert amazon.isna().sum() == 0
 amazon = amazon.str.replace("[\r\n]", " ", regex=True, flags=re.DOTALL|re.MULTILINE)
 amazon = amazon.str.replace("[^A-Za-z0-9]", " ", regex=True, flags=re.DOTALL|re.MULTILINE)
+# 9 seconds
 
+# len(amazon) = 1426336 rows
+# amazon.memory_usage(deep=True) = 345 Megabytes
 
-tokens = pd.DataFrame(
-    splits_rs.split_strings(amazon.values),
-    columns=["index","token"]
-)
-tokens
+# convert to pyarrow
+arr = pa.array(amazon)
+# 0.1 seconds
 
+(a,b) = splits_rs.split_strings_arrow(arr)
+# 7 seconds 🤯
+
+result = pd.concat([a.to_pandas(),b.to_pandas()], axis='columns')
+# 13 seconds
+
+result
 ```
 
 ||index|token|
@@ -64,10 +79,11 @@ tokens
 |29|1|Expandable PC ABS|
 |...|...|...|
 
+> 80278819 rows × 2 columns
+
+
 ### Performance
 
-Currently the approach used is not great. Although string processing is run in parallel and completes very fast, the handover between rust, python and pandas is very slow and takes most of the time.
+Switching to `pyarrow` as the return type made a huuuge difference to speed. The downside is that `rayon` does not seem to be easy to use with the `pyarrow` rust crate.
 
-We have to deal with python GIL nonsense because numpy stores each string as a python object. This prevents us from reading the strings in-place from multiple threads, even though this would be perfectly safe.
-
-Maybe could be a lot faster if we could receive and return Arrow arrays?
+Maybe the `numpy` solution can be made to run a lot faster if we can return `numpy` arrays instead of python types.
