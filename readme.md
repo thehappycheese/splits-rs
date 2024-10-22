@@ -1,6 +1,8 @@
 # splits'r'us
 
-Splits a string on whitespace (any length/type)
+Splits a string on whitespace returning order-preserving combinations of 1, 2 and 3 words.
+
+Uses unstable rust features so likely to break in future.
 
 e.g.
 
